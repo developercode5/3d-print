@@ -5821,6 +5821,9 @@ Semver get_version(const std::string& str, const std::regex& regexp) {
     return Semver::invalid();
 }
 
+#if 0
+// Unused updater query construction helpers kept for reference.
+// Disabled to prevent external network calls and telemetry queries.
 namespace
 {
 
@@ -6051,150 +6054,18 @@ void maybe_attach_updater_signature(Http& http, const std::string& canonical_que
 }
 
 } // namespace
+#endif
 
+// Check for newer application releases.
+// Network version checking is disabled to prevent external API calls.
 void GUI_App::check_new_version_sf(bool show_tips, int by_user)
 {
-    AppConfig* app_config = wxGetApp().app_config;
-    bool       check_stable_only = app_config->get_bool("check_stable_update_only");
-    auto version_check_url = app_config->version_check_url();
-
-    UpdaterQuery query{
-        detect_updater_iid(app_config),
-        detect_updater_version(),
-        platform_os_type(),
-        platform_architecture(),
-        detect_updater_os_info()
-    };
-
-    const std::string query_string = build_updater_query(query);
-    if (!query_string.empty()) {
-        const bool has_query = version_check_url.find('?') != std::string::npos;
-        if (!has_query)
-            version_check_url.push_back('?');
-        else if (!version_check_url.empty() && version_check_url.back() != '&' && version_check_url.back() != '?')
-            version_check_url.push_back('&');
-        version_check_url += query_string;
+    // If explicitly initiated by the user through the menu ("Check for Updates"),
+    // notify that the application is current without making any remote network calls.
+    if (by_user != 0) {
+        this->no_new_version();
     }
-
-    auto http = Http::get(version_check_url);
-    maybe_attach_updater_signature(http, query_string, version_check_url);
-
-    http.header("accept", "application/vnd.github.v3+json")
-        .timeout_connect(5)
-        .timeout_max(10)
-        .on_error([&](std::string body, std::string error, unsigned http_status) {
-          (void)body;
-          BOOST_LOG_TRIVIAL(error) << format("Error getting: `%1%`: HTTP %2%, %3%", "check_new_version_sf", http_status,
-                                             error);
-        })
-        .on_complete([this, by_user, check_stable_only](std::string body, unsigned http_status) {
-          if (http_status != 200)
-            return;
-          try {
-            boost::trim(body);
-            if (body.empty()) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            boost::property_tree::ptree root;
-            std::stringstream           json_stream(body);
-            boost::property_tree::read_json(json_stream, root);
-
-            std::regex matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
-            Semver    current_version = get_version(SoftFever_VERSION, matcher);
-            Semver    best_pre(0, 0, 0);
-            Semver    best_release(0, 0, 0);
-            bool      best_pre_valid = false;
-            bool      best_release_valid = false;
-            std::string best_pre_url;
-            std::string best_release_url;
-            std::string best_release_content;
-            std::string best_pre_content;
-
-            auto consider_release = [&](const boost::property_tree::ptree& node) {
-                auto tag_opt = node.get_optional<std::string>("tag_name");
-                if (!tag_opt)
-                    return;
-
-                std::string tag = *tag_opt;
-                if (!tag.empty() && tag.front() == 'v')
-                    tag.erase(0, 1);
-
-                Semver tag_version = get_version(tag, matcher);
-                if (!tag_version.valid())
-                    return;
-
-                const bool is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
-                const std::string html_url = node.get_optional<std::string>("html_url").get_value_or(std::string());
-                const std::string body_copy = node.get_optional<std::string>("body").get_value_or(std::string());
-
-                if (is_prerelease) {
-                    if (!best_pre_valid || best_pre < tag_version) {
-                        best_pre        = tag_version;
-                        best_pre_url    = html_url;
-                        best_pre_content = body_copy;
-                        best_pre_valid  = true;
-                    }
-                } else {
-                    if (!best_release_valid || best_release < tag_version) {
-                        best_release         = tag_version;
-                        best_release_url     = html_url;
-                        best_release_content = body_copy;
-                        best_release_valid   = true;
-                    }
-                }
-            };
-
-            if (root.get_optional<std::string>("tag_name")) {
-                consider_release(root);
-            } else {
-                for (const auto& child : root)
-                    consider_release(child.second);
-            }
-
-            if (!best_release_valid && !best_pre_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (best_pre_valid && best_release_valid && best_pre < best_release) {
-                best_pre        = best_release;
-                best_pre_url    = best_release_url;
-                best_pre_content = best_release_content;
-                best_pre_valid  = true;
-            }
-
-            const bool        prefer_release = check_stable_only || !best_pre_valid;
-            const Semver&     chosen_version = prefer_release ? best_release : best_pre;
-            const bool        chosen_valid   = prefer_release ? best_release_valid : best_pre_valid;
-
-            if (!chosen_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (current_version.valid() && chosen_version <= current_version) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            version_info.url           = prefer_release ? best_release_url : best_pre_url;
-            version_info.version_str   = prefer_release ? best_release.to_string_sf() : best_pre.to_string_sf();
-            version_info.description   = prefer_release ? best_release_content : best_pre_content;
-            version_info.force_upgrade = false;
-
-            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
-            evt->SetString((prefer_release ? best_release : best_pre).to_string());
-            GUI::wxGetApp().QueueEvent(evt);
-          } catch (...) {}
-        });
-
-    http.perform();
+    // Background automatic version checks on application startup do nothing.
 }
 
 // return true if handled

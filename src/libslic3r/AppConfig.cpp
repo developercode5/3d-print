@@ -40,7 +40,8 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
+// Default endpoint for checking newer application versions. Disabled to prevent external requests.
+static const std::string VERSION_CHECK_URL = "";
 static const std::string PROFILE_UPDATE_URL = "https://check-version.orcaslicer.com/profile";
 
 constexpr const char* CONFIG_ORCA_UPDATER_URL = "orca_updater_url";
