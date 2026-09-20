@@ -236,63 +236,42 @@ wxString NetworkTestDialog::get_dns_info()
 	return NA_STR;
 }
 
+// Start concurrent network connectivity tests (multi-threaded).
+// Triggers test jobs without sending external network requests.
 void NetworkTestDialog::start_all_job()
 {
 	start_test_github_thread();
 	start_test_bing_thread();
 }
 
+// Start sequential network connectivity tests (single-threaded).
+// Triggers test jobs sequentially without sending external network requests.
 void NetworkTestDialog::start_all_job_sequence()
 {
 	m_sequence_job = new boost::thread([this] {
 		update_status(-1, "start_test_sequence");
-        start_test_url(TEST_BING_JOB, "Bing", "http://www.bing.com");
-        if (m_closing) return;
-		start_test_url(TEST_ORCA_JOB, "OrcaSlicer(GitHub)", "https://github.com/OrcaSlicer/OrcaSlicer");
+		start_test_url(TEST_BING_JOB, "Bing", "");
+		if (m_closing) return;
+		start_test_url(TEST_ORCA_JOB, "OrcaSlicer(GitHub)", "");
 		if (m_closing) return;
 		update_status(-1, "end_test_sequence");
 	});
 }
 
-void NetworkTestDialog::start_test_url(TestJob job, wxString name, wxString url)
+// Execute a network connectivity test for the given job.
+// External network tests have been disabled to prevent unsolicited outgoing HTTP requests to external services like Bing or GitHub.
+void NetworkTestDialog::start_test_url(TestJob job, wxString name, wxString /*url*/)
 {
 	m_in_testing[job] = true;
-	wxString info = wxString::Format("test %s start...", name);
+	wxString info = wxString::Format("test %s disabled (offline)", name);
 
 	update_status(job, info);
+	update_status(-1, wxString::Format("[test %s]: external network test disabled", name));
 
-	Slic3r::Http http = Slic3r::Http::get(url.ToStdString());
-	info = wxString::Format("[test %s]: url=%s", name,url);
-
-    update_status(-1, info);
-
-    int result = -1;
-	http.timeout_max(10)
-		.on_complete([&result](std::string body, unsigned status) {
-			try {
-				if (status == 200) {
-					result = 0;
-				}
-			}
-			catch (...) {
-				;
-			}
-		})
-		.on_ip_resolve([this,name,job](std::string ip) {
-			wxString ip_report = wxString::Format("test %s ip resolved = %s", name, ip);
-			update_status(job, ip_report);
-		})
-		.on_error([this,name,job](std::string body, std::string error, unsigned int status) {
-		wxString info = wxString::Format("status=%u, body=%s, error=%s", status, body, error);
-        this->update_status(job, wxString::Format("test %s failed", name));
-        this->update_status(-1, info);
-	}).perform_sync();
-	if (result == 0) {
-        update_status(job, wxString::Format("test %s ok", name));
-    }
 	m_in_testing[job] = false;
 }
 
+// Start ICMP ping test thread.
 void NetworkTestDialog::start_test_ping_thread()
 {
 	test_job[TEST_PING_JOB] = new boost::thread([this] {
@@ -301,20 +280,29 @@ void NetworkTestDialog::start_test_ping_thread()
 		m_in_testing[TEST_PING_JOB] = false;
 	});
 }
+
+// Start OrcaSlicer GitHub connectivity test thread.
+// Spawns a background thread to update test status without sending external HTTP requests.
 void NetworkTestDialog::start_test_github_thread()
 {
-    if (m_in_testing[TEST_ORCA_JOB])
-        return;
-    test_job[TEST_ORCA_JOB] = new boost::thread([this] {
-        start_test_url(TEST_ORCA_JOB, "OrcaSlicer(GitHub)", "https://github.com/OrcaSlicer/OrcaSlicer");
-    });
+	if (m_in_testing[TEST_ORCA_JOB])
+		return;
+	test_job[TEST_ORCA_JOB] = new boost::thread([this] {
+		start_test_url(TEST_ORCA_JOB, "OrcaSlicer(GitHub)", "");
+	});
 }
+
+// Start Bing connectivity test thread.
+// Spawns a background thread to update test status without sending external HTTP requests.
 void NetworkTestDialog::start_test_bing_thread()
 {
-    test_job[TEST_BING_JOB] = new boost::thread([this] {
-        start_test_url(TEST_BING_JOB, "Bing", "http://www.bing.com");
-    });
+	if (m_in_testing[TEST_BING_JOB])
+		return;
+	test_job[TEST_BING_JOB] = new boost::thread([this] {
+		start_test_url(TEST_BING_JOB, "Bing", "");
+	});
 }
+
 
 void NetworkTestDialog::on_close(wxCloseEvent& event)
 {
