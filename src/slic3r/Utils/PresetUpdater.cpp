@@ -291,11 +291,8 @@ void PresetUpdater::priv::set_download_prefs(AppConfig *app_config)
 {
 	version_check_url = app_config->version_check_url();
 
-	auto profile_update_url = app_config->profile_update_url();
-	if (!profile_update_url.empty() && app_config->get_bool("enable_ota"))
-		enabled_config_update = true;
-	else
-		enabled_config_update = false;
+	// OTA profile and preset updates are disabled to prevent external network calls.
+	enabled_config_update = false;
 }
 
 //BBS: refine the Preset Updater logic
@@ -511,6 +508,11 @@ void PresetUpdater::priv::parse_version_string(const std::string& body) const
 // Both are saved in cache.
 void PresetUpdater::priv::sync_resources(std::string http_url, std::map<std::string, Resource> &resources, bool check_patch, std::string current_version_str, std::string changelog_file)
 {
+    // Return early if URL is empty or config updates are disabled to prevent external API calls.
+    if (http_url.empty() || !enabled_config_update) {
+        return;
+    }
+
     std::map<std::string, Resource>    resource_list;
 
     BOOST_LOG_TRIVIAL(info) << boost::format("[Orca Updater]: sync_resources get preferred setting version for app version %1%, url: %2%, current_version_str %3%, check_patch %4%")%SLIC3R_APP_NAME%http_url%current_version_str%check_patch;
@@ -689,7 +691,9 @@ void PresetUpdater::priv::sync_vendor_config(const std::string& vendor_id)
     };
 
     AppConfig *app_config = GUI::wxGetApp().app_config;
-    std::string url = app_config->profile_update_url()
+    std::string base_url = app_config ? app_config->profile_update_url() : "";
+    if (base_url.empty()) return;
+    std::string url = base_url
         + "?vendor=" + Http::url_encode(vendor_id)
         + "&orca_version=" + Http::url_encode(SoftFever_VERSION);
 
@@ -1460,9 +1464,16 @@ void PresetUpdater::check_vendor_update(const std::string& vendor_id)
 void PresetUpdater::priv::check_new_vendors(const std::set<std::string>& system_vendors,
                                              std::function<void(std::vector<std::string>, bool)> callback)
 {
-    vendor_check_threads.emplace_back([this, system_vendors, callback]() {
-        AppConfig* app_config = GUI::wxGetApp().app_config;
-        std::string url       = app_config->profile_update_url() + "/new?orcaslicer_version=" + Http::url_encode(SoftFever_VERSION);
+    AppConfig* app_config = GUI::wxGetApp().app_config;
+    std::string base_url  = app_config ? app_config->profile_update_url() : "";
+    if (base_url.empty() || !enabled_config_update) {
+        if (callback)
+            callback({}, false);
+        return;
+    }
+
+    vendor_check_threads.emplace_back([this, system_vendors, callback, base_url]() {
+        std::string url = base_url + "/new?orcaslicer_version=" + Http::url_encode(SoftFever_VERSION);
 
         auto check_cancel = [this](Http::Progress, bool& cancel_http) {
             if (cancel || vendor_check_cancel)
